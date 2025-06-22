@@ -431,14 +431,23 @@ void Menu_Managment(){
       if (currentMenu == 0) {Refresh_Menu(cursorLine+1); cursorLine =0; }// nouveau menu
       else if (currentMenu != 0 && cursorLine == 0) Refresh_Menu(0); // retour au HOME
       else if (currentMenu != 0 && cursorLine > 0) Submenu_Managment(currentMenu); // OK sur un subMenu
+      if ((currentMenu == 1) && (cursorLine == 3)){ // menu MAIN - firing
+      Refresh_Menu();
+      }
+        
       break;
     case ' ' :
       if ((currentMenu == 1) && (cursorLine == 3)){ // menu MAIN - firing
+        if (!(countdownBeforeFiring <= 0.0f)){ //si on a pas tiré
+          lcd.setCursor(8, 3);
+          lcd.print("-Firing  OFF");        
+        }      
         countdownBeforeFiring = 3;
-        startCountdownBeforeFiring = 0;
-        lcd.setCursor(17, 3);
-        lcd.print("OFF");
-      }   
+        startCountdownBeforeFiring = 0;      
+      } 
+      if ((currentMenu == 1) && (cursorLine == 2)){ // menu MAIN - pulse
+        Refresh_Menu();
+      }  
   }
   char buf[10];
   sprintf(buf, "%d ", cursorLine); 
@@ -449,23 +458,37 @@ void firingProcedure(){
 
   char statusStr[4];
 
-  sysData.firingValue.value = !sysData.firingValue.value;
-  strncpy(statusStr, sysData.firingValue.formatStr + (sysData.firingValue.value ? 3 : 0), 3);
-  statusStr[3] = '\0'; 
-  lcd.setCursor(17, 3);
-  lcd.print(statusStr); // affichage du ON avant cette pause
+  sysData.firingValue.value = !sysData.firingValue.value; //ON
+
 
   CAN_Msg_Write(sysData.PulseTime.can_id, sysData.PulseTime.value);
   CAN_Msg_Write(sysData.firingValue.can_id, sysData.firingValue.value);
 
+  char buf[20];
+  float pressure_bar = sysData.pressureSensor.value;
+  int pression_entier = pressure_bar; // partie entière
+  int pression_decimal = (pressure_bar - pression_entier) * 100; // deux chiffres après la virgule
+  sprintf(buf, sysData.pressureSensor.formatStr, pression_entier, pression_decimal);
+  lcd.setCursor(8, 3);
+  lcd.print("->>> ");
+  lcd.setCursor(13, 3);
+  lcd.print(buf);
+
   HAL_Delay(sysData.PulseTime.value); // pause
 
-  sysData.firingValue.value = !sysData.firingValue.value; // rafraichissement de ON vers OFF
-  strncpy(statusStr, sysData.firingValue.formatStr + (sysData.firingValue.value ? 3 : 0), 3); 
-  statusStr[3] = '\0'; // pour s'assurer que c'est bien terminé
-  lcd.setCursor(17, 3);
-  lcd.print(statusStr); // affichage du OFF
-  refreshMenuStruct(statusStr);
+  sysData.firingValue.value = !sysData.firingValue.value; // OFF
+
+  if (sysData.autoExhaust.value == 1){
+    menus[1].subtitle[1][5] = '0';
+    menus[1].subtitle[1][6] = '.';
+    menus[1].subtitle[1][7] = '0';
+    menus[1].subtitle[1][8] = '0';
+    lcd.setCursor(8, 1);
+    lcd.print("-Pre 0.00bar");
+    sysData.pressureConsign.value = 0.0f;
+  }
+  
+  
   
 }
 
@@ -673,9 +696,11 @@ void CAN_Msg_Read() {
       if (CAN_RX_msg.id == sysData.pressureSensor.can_id && CAN_RX_msg.len >= 2) {
         data = (CAN_RX_msg.buf[1] << 8) | CAN_RX_msg.buf[0];
         float pressure_bar = (data / 4095.0f) * 9.99f;
+        sysData.pressureSensor.value = pressure_bar;
         int pression_entier = pressure_bar; // partie entière
         int pression_decimal = (pressure_bar - pression_entier) * 100; // deux chiffres après la virgule
         sprintf(buf, sysData.pressureSensor.formatStr, pression_entier, pression_decimal);
+        
         lcd.setCursor(0, 1);
         lcd.print(buf);
         if (pressure_bar <= 0.5){

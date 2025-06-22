@@ -83,6 +83,8 @@ static int myClockPeriodMs = 200;
 
 bool CAN_msg_received = false;
 
+bool emergency_status = 0;
+
 void setup_pwm() {
   // Activer les horloges pour les GPIOs et les timers
   __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -198,7 +200,10 @@ void executeFiringSequence(uint32_t pulseTime, uint8_t triggerTime) {
     if (auto_exhaust) {
       HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_RESET); // Echapement automatique
       send_can(1, 0x1A3);
-    }    
+      set_pid_enabled(false);
+      set_pid_consign(false);
+    }
+
 }
 
 // Fonction de réception complète adaptée pour les messages de 4 octets
@@ -257,9 +262,12 @@ void CAN_Msg_Checking() {
         set_pid_consign(pressureConsign);                // Consigne 4.55 bar comme votre exemple
         if (pressureConsign) {
           set_pid_enabled(true);
+          HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_SET);
+          send_can(0, 0x1A3);
         }
         else {
           set_pid_enabled(false);
+          set_pid_consign(false);
           HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_RESET); //set fermé, reset ouvert    
           send_can(1, 0x1A3);
         }
@@ -292,13 +300,13 @@ void CAN_Msg_Checking() {
         Serial.print("EXHAUST: ");
         if(float_value < 0.5) {
           
-          HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_SET);
           send_can(1, 0x1A3);
           set_pid_enabled(false);
         }
         else {
           
-          HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_RESET);
           send_can(0, 0x1A3);
           set_pid_enabled(false);
         }
@@ -414,9 +422,9 @@ void setup() {
   set_intake_ttl_valve_duty(0);
 
   //PID
-  setup_periodic_control(1000);  // Fréquence en Hz
+  setup_periodic_control(200);  // Fréquence en Hz
   // Configuration du PID - valeurs de test
-  set_pid_parameters(60.0, 40.0, 0.05, 30.0);  // Kp, Ki, Kd, offset
+  set_pid_parameters(300.0, 40.0, 0.05, 30.0);  // Kp, Ki, Kd, offset
   set_pid_consign(4.55);                // Consigne 4.55 bar comme votre exemple
   set_pid_enabled(false);                // Activer le PID
 
@@ -520,6 +528,7 @@ void loop() {
   bool EXHAUST_BUTTON = HAL_GPIO_ReadPin(EXHAUST_BUTTON_PORT, EXHAUST_BUTTON_PIN);
   //uint16_t PRESSURE_SENSOR = analogRead(PRESSURE_SENSOR_PIN); 
   static bool last_EXHAUST_BUTTON = 0;
+  static bool last_EMERGENCY_STOP = 1;
   static bool exhaustValue = 0;
   static bool last_INT_EMERGENCY_STOP = 0;
 
@@ -528,14 +537,14 @@ void loop() {
     HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, exhaustValue ? GPIO_PIN_SET : GPIO_PIN_RESET);
     CAN_TX_msg.id = (0x1A3);
     CAN_TX_msg.len = 2; // max8
-    CAN_TX_msg.buf[0] = exhaustValue & 0xFF;         // Octet faible
-    CAN_TX_msg.buf[1] = (exhaustValue >> 8) & 0xFF;  // Octet fort
+    CAN_TX_msg.buf[0] = !exhaustValue & 0xFF;         // Octet faible
+    CAN_TX_msg.buf[1] = (!exhaustValue >> 8) & 0xFF;  // Octet fort
     Can.write(CAN_TX_msg);
   }
   last_EXHAUST_BUTTON = EXHAUST_BUTTON;
   
-  if (INT_EMERGENCY_STOP == 0 && last_INT_EMERGENCY_STOP == 1) {
-    exhaustValue = 0;
+  if ((INT_EMERGENCY_STOP == 0 && last_INT_EMERGENCY_STOP == 1)||(EMERGENCY_STOP == 1 && last_EMERGENCY_STOP == 0)) {
+    exhaustValue = 1;
     HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_RESET);
     CAN_TX_msg.id = (0x1A3);
     CAN_TX_msg.len = 2; // max8
@@ -545,18 +554,29 @@ void loop() {
     HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);
     HAL_Delay(50);
     HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+    set_pid_enabled(false);
+    set_pid_consign(false);
+    emergency_status = 1;
+    while (EMERGENCY_STOP == 1){
+      EMERGENCY_STOP = HAL_GPIO_ReadPin(BUTTON_EMERGENCY_STOP_PORT, BUTTON_EMERGENCY_STOP_PIN);
+      HAL_GPIO_TogglePin(BUZZER_PORT, BUZZER_PIN);
+      HAL_Delay(500);
+    }
+    HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
   }
   last_INT_EMERGENCY_STOP = INT_EMERGENCY_STOP;
+  last_EMERGENCY_STOP = EMERGENCY_STOP;
 
   
 
   myClock = (millis()/(myClockPeriodMs/2))%2;
   if (myClock == 0 && myPreviousClock == 1){
-  
+    static int my_counter = 0;
+    my_counter+=1;
     if (CAN_msg_received = true){
       HAL_GPIO_WritePin(YELLOW_LED_PORT, YELLOW_LED_PIN, GPIO_PIN_RESET);
       CAN_msg_received = false;
-    }
+    } 
   }
   myPreviousClock = myClock;
   CAN_Msg_Checking();

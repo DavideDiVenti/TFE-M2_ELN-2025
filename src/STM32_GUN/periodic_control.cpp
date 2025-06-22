@@ -6,7 +6,7 @@ volatile int control_counter = 0;
 
 // Variables PID
 float pid_consign = 0.0f;          // Consigne de pression (bar)
-float pid_kp = 60.0f;              // Gain proportionnel (plus haut, plus brutal)
+float pid_kp = 300.0f;              // Gain proportionnel (plus haut, plus brutal)
 float pid_ki = 120.0f;             // Gain intégral
 float pid_kd = 0.050f;              // Gain dérivé (plus haut, plus lent lors en transitoire)
 bool pid_enabled = false;          // PID activé/désactivé
@@ -19,7 +19,7 @@ extern bool auto_exhaust;
 static float error[2] = {0.0f, 0.0f};  // error[0] = actuel, error[1] = précédent
 static float integral = 0.0f;          // Terme intégral
 static float last_command = 0.0f;      // Dernière commande (pour filtrage)
-static const float tEch = 1.0f / 1000.0f;  // Période d'échantillonnage (1ms)
+static const float tEch = 1.0f / 200.0f;  // Période d'échantillonnage (1ms)
 
 
 // Pin de lecture pression (correspond à votre #define PRESSURE_SENSOR_PIN PA0)
@@ -79,18 +79,23 @@ void periodic_control_function(void) {
       HAL_GPIO_WritePin(RED_LED_PORT, RED_LED_PIN, GPIO_PIN_SET);
       HAL_GPIO_WritePin(GREEN_LED_PORT, GREEN_LED_PIN, GPIO_PIN_RESET);    
   }
-  if (control_counter % 100 == 0) {
-    send_can(PRESSURE_SENSOR, 0x1A5);  // Appel de la fonction toutes les 200ms
+  if (control_counter % 20 == 0) {
+    send_can(PRESSURE_SENSOR, 0x1A5);  // Appel de la fonction toutes les 100ms
     if (command != previous_command) send_can(command, 0x1A4);
     if (exhaust_enabled != previous_exhaust_enabled) send_can(exhaust_enabled, 0x1A3);
     previous_command = command;
     previous_exhaust_enabled = exhaust_enabled;
   }
   
+  static float previous_pid_consign = 0;
   // Si le PID n'est pas activé, on sort
-  if (!pid_enabled || pid_consign == 0.0f) {
+  if (pid_consign == 0.0f && previous_pid_consign !=0) {
     set_intake_valve_duty(0);
     command = 0;
+  }
+  previous_pid_consign = pid_consign;
+
+  if (!pid_enabled ) {
     return;
   }
   
@@ -103,8 +108,8 @@ void periodic_control_function(void) {
   derivative = (error[0] - error[1]) / tEch; // Taux de variation actuel
   
   // Limitation anti-windup de l'intégrale
-  if (integral > 50.0f) integral = 50.0f;
-  if (integral < -50.0f) integral = -50.0f;
+  if (integral > 500.0f) integral = 500.0f;
+  if (integral < -500.0f) integral = -500.0f;
   
   command = pid_kp * error[0] + pid_ki * integral + pid_kd * derivative; // Calcul PID de base
 
@@ -151,12 +156,12 @@ void periodic_control_function(void) {
     moyenne_error = sum_error / nb_error_samples;
   }
 
-  if (moyenne_error<-0.05 && control_counter % 1000 == 0){
+  if (moyenne_error<-0.50 && control_counter % 200 == 0){
     HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_RESET); //set fermé, reset ouvert    
     exhaust_enabled = true;
     send_can(exhaust_enabled, 0x1A3);
   }
-  else if (moyenne_error>0.20 && control_counter % 1000 == 0) {
+  else if (moyenne_error>0.50 && control_counter % 200 == 0) {
     HAL_GPIO_WritePin(EXHAUST_VALVE_PORT, EXHAUST_VALVE_PIN, GPIO_PIN_SET); //set fermé, reset ouvert
     exhaust_enabled = false;
     send_can(exhaust_enabled, 0x1A3);
